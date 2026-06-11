@@ -128,14 +128,25 @@ fn cmd_list() -> Result<()> {
         .unwrap_or(7)
         .clamp(7, 32);
 
+    // Org column width — sized to content, capped; min fits the "Org" header.
+    let org_w = cfg
+        .accounts
+        .iter()
+        .filter_map(|a| a.org_name.as_ref())
+        .map(|o| o.chars().count())
+        .max()
+        .unwrap_or(3)
+        .clamp(3, 24);
+
     // Column widths (visible).
     let (w_idx, w_tier, w_status, w_quota, w_reqs) = (3, 4, 14, 16, 6);
 
     let line = |l: &str, m: &str, r: &str| {
         format!(
-            "{l}{}{m}{}{m}{}{m}{}{m}{}{m}{}{r}",
+            "{l}{}{m}{}{m}{}{m}{}{m}{}{m}{}{m}{}{r}",
             "─".repeat(w_idx + 2),
             "─".repeat(name_w + 2),
+            "─".repeat(org_w + 2),
             "─".repeat(w_tier + 2),
             "─".repeat(w_status + 2),
             "─".repeat(w_quota + 2),
@@ -144,9 +155,10 @@ fn cmd_list() -> Result<()> {
     };
 
     let header = format!(
-        "│ {} │ {} │ {} │ {} │ {} │ {} │",
+        "│ {} │ {} │ {} │ {} │ {} │ {} │ {} │",
         ui::dim(&ui::pad_end("#", w_idx)),
         ui::dim(&ui::pad_end("Account", name_w)),
+        ui::dim(&ui::pad_end("Org", org_w)),
         ui::dim(&ui::pad_end("Tier", w_tier)),
         ui::dim(&ui::pad_end("Status", w_status)),
         ui::dim(&ui::pad_end("Quota", w_quota)),
@@ -165,6 +177,7 @@ fn cmd_list() -> Result<()> {
         } else {
             format!(" {n}")
         };
+        let org = a.org_name.clone().unwrap_or_else(|| "—".into());
         let tier = a.tier.clone().unwrap_or_else(|| "—".into());
 
         let status = if a.is_cooling_down(now) {
@@ -179,9 +192,10 @@ fn cmd_list() -> Result<()> {
         let quota = ui::quota_bar(a.peak_utilization(now));
 
         println!(
-            "  │ {} │ {} │ {} │ {} │ {} │ {} │",
+            "  │ {} │ {} │ {} │ {} │ {} │ {} │ {} │",
             ui::pad_end(&idx, w_idx),
             ui::pad_end(&a.name, name_w),
+            ui::pad_end(&org, org_w),
             ui::pad_end(&tier, w_tier),
             ui::pad_end(&status, w_status),
             ui::pad_end(&quota, w_quota),
