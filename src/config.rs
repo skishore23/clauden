@@ -178,11 +178,15 @@ impl Config {
 
     /// Load config from disk, or return defaults if it doesn't exist yet.
     pub fn load() -> Result<Self> {
-        let path = Self::path()?;
+        Self::load_from(&Self::path()?)
+    }
+
+    /// Load config from an explicit path (defaults if it doesn't exist).
+    pub fn load_from(path: &std::path::Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = std::fs::read_to_string(&path)
+        let raw = std::fs::read_to_string(path)
             .with_context(|| format!("reading {}", path.display()))?;
         let cfg: Config = serde_json::from_str(&raw)
             .with_context(|| format!("parsing {}", path.display()))?;

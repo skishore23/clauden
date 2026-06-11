@@ -333,6 +333,15 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         .unwrap_or("/");
     let url = format!("{}{}", state.upstream, path_and_query);
 
+    // Pick up out-of-band settings changes (`clauden use/rename/remove/strategy`)
+    // made while the proxy is running. Disk is authoritative because the proxy
+    // persists after every request, so reloading never loses runtime stats.
+    if let Some(path) = &state.config_path {
+        if let Ok(fresh) = Config::load_from(path) {
+            *state.cfg.lock().await = fresh;
+        }
+    }
+
     let account_count = { state.cfg.lock().await.accounts.len() };
     if account_count == 0 {
         return error_response(
