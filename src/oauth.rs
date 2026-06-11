@@ -45,7 +45,11 @@ pub fn generate_pkce() -> Pkce {
 }
 
 /// Build the authorize URL the user opens in their browser.
-pub fn authorize_url(challenge: &str, state: &str, redirect_uri: &str) -> String {
+///
+/// `force_login` adds `prompt=login` so the login / workspace chooser is shown
+/// even when the browser already has an active claude.ai session — needed to
+/// pick a *different* workspace for the same account.
+pub fn authorize_url(challenge: &str, state: &str, redirect_uri: &str, force_login: bool) -> String {
     let mut url = reqwest::Url::parse(AUTHORIZE_URL).expect("valid base url");
     url.query_pairs_mut()
         .append_pair("code", "true")
@@ -56,6 +60,9 @@ pub fn authorize_url(challenge: &str, state: &str, redirect_uri: &str) -> String
         .append_pair("code_challenge", challenge)
         .append_pair("code_challenge_method", "S256")
         .append_pair("state", state);
+    if force_login {
+        url.query_pairs_mut().append_pair("prompt", "login");
+    }
     url.to_string()
 }
 

@@ -36,7 +36,12 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     /// Add a Claude account via browser OAuth login.
-    Login,
+    Login {
+        /// Force the login/workspace chooser (use to add a different workspace
+        /// for an account you're already signed into).
+        #[arg(long)]
+        fresh: bool,
+    },
     /// List configured accounts and their status.
     List,
     /// Show proxy + account status.
@@ -66,7 +71,7 @@ async fn main() -> Result<()> {
     }
 
     match cli.command {
-        Some(Command::Login) => cmd_login().await,
+        Some(Command::Login { fresh }) => cmd_login(fresh).await,
         Some(Command::List) | Some(Command::Status) => cmd_list(),
         Some(Command::Use { name }) => cmd_use(&name),
         Some(Command::Remove { name }) => cmd_remove(&name),
@@ -76,9 +81,9 @@ async fn main() -> Result<()> {
     }
 }
 
-async fn cmd_login() -> Result<()> {
+async fn cmd_login(fresh: bool) -> Result<()> {
     let mut cfg = Config::load()?;
-    login::run(&mut cfg).await?;
+    login::run(&mut cfg, fresh).await?;
     cfg.save()?;
     println!(
         "  {} {} account(s) configured. Run {} to see them.\n",

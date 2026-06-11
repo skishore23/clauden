@@ -138,6 +138,20 @@ by organization and disambiguates the display name, e.g.:
 Select either by its number (`clauden use 1`) or full name. Logging in again
 with the same account *and* org just refreshes its tokens in place.
 
+**If the browser skips the workspace chooser:** Claude scopes the token to
+whichever workspace is *active* in your `claude.ai` browser session, and an
+existing session cookie makes the authorize page skip the chooser. To add a
+*different* workspace for the same account:
+
+```bash
+clauden login --fresh    # forces the login/workspace chooser (prompt=login)
+```
+
+If it still lands on the same workspace, either switch the active workspace in
+`claude.ai` first (account menu → workspace switcher) and run `clauden login`,
+or paste the printed auth URL into a **private/incognito window** and pick the
+workspace there.
+
 ---
 
 ## 5. Choosing a load-balancing strategy

@@ -11,7 +11,10 @@ use crate::oauth;
 use crate::ui;
 
 /// Run the full login flow and persist the new account into `cfg`.
-pub async fn run(cfg: &mut Config) -> Result<()> {
+///
+/// `fresh` forces the login/workspace chooser (`prompt=login`) so you can pick a
+/// different workspace for an account you're already signed into.
+pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
     let pkce = oauth::generate_pkce();
 
     // Bind a local callback server on an ephemeral port.
@@ -21,13 +24,19 @@ pub async fn run(cfg: &mut Config) -> Result<()> {
     let port = listener.local_addr()?.port();
     let redirect_uri = format!("http://localhost:{port}/callback");
 
-    let auth_url = oauth::authorize_url(&pkce.challenge, &pkce.state, &redirect_uri);
+    let auth_url = oauth::authorize_url(&pkce.challenge, &pkce.state, &redirect_uri, fresh);
 
     println!(
         "\n  {}  {}",
         ui::magenta("(• ◡ -)"),
         ui::bold("Opening your browser to log in to Claude…")
     );
+    if fresh {
+        println!(
+            "  {}",
+            ui::dim("(--fresh) forcing the login/workspace chooser. Tip: a private/incognito window guarantees you can pick a different workspace.")
+        );
+    }
     println!(
         "  {} {}\n",
         ui::dim("If it doesn't open, paste this URL:"),
