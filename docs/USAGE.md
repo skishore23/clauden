@@ -283,6 +283,14 @@ Run with `--verbose` to log every rotation, refresh, and upstream error:
 **Port already in use**
 Another process is on `:3131`. Use `--port` to pick a free one.
 
+**An account shows `● needs login` in `clauden list`**
+Its refresh token was rejected (revoked, password change, or genuinely expired),
+so clauden can't renew it. The account is automatically excluded from rotation
+so it won't break your requests. Restore it by re-authenticating:
+```bash
+clauden login        # log into that account again (a successful login clears the flag)
+```
+
 **Claude Code asks me to log in / `/login` re-prompts for OAuth**
 clauden and Claude Code have **separate** auth. `clauden login` logs *clauden*
 into your accounts (`~/.claudeN/config.json`); `/login` and `/logout` inside

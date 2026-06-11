@@ -102,6 +102,7 @@ pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_at,
         cooldown_until: None,
+        needs_login: false,
         usage_count: 0,
         util_5h: None,
         util_7d: None,

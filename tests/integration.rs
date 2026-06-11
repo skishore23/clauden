@@ -113,6 +113,7 @@ fn account(name: &str, token: &str) -> Account {
         refresh_token: "refresh".into(),
         expires_at: 32_503_680_000_000, // year ~3000: never refresh during tests
         cooldown_until: None,
+        needs_login: false,
         usage_count: 0,
         util_5h: None,
         util_7d: None,

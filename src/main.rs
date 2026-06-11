@@ -183,7 +183,9 @@ fn cmd_list() -> Result<()> {
         let org = a.org_name.clone().unwrap_or_else(|| "—".into());
         let tier = a.tier.clone().unwrap_or_else(|| "—".into());
 
-        let status = if a.is_cooling_down(now) {
+        let status = if a.needs_login {
+            ui::status_dot("needs login", ui::Status::Down)
+        } else if a.is_cooling_down(now) {
             let secs = (a.cooldown_until.unwrap_or(0) - now).max(0) / 1000;
             ui::status_dot(&format!("cooldown {}", fmt_dur(secs)), ui::Status::Down)
         } else if a.is_near_quota(now, 0.95) {

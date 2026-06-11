@@ -70,6 +70,11 @@ pub struct Account {
     #[serde(default)]
     pub cooldown_until: Option<i64>,
 
+    /// Set when a token refresh fails with an auth error (revoked/expired
+    /// refresh token). The account is excluded from rotation until re-login.
+    #[serde(default)]
+    pub needs_login: bool,
+
     /// Number of requests served by this account (drives `least-used`).
     #[serde(default)]
     pub usage_count: u64,

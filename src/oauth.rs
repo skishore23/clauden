@@ -147,8 +147,35 @@ pub async fn exchange_code(
     })
 }
 
-/// Refresh an access token. The server may rotate the refresh token.
-pub async fn refresh(client: &reqwest::Client, refresh_token: &str) -> Result<Tokens> {
+/// Why a token refresh failed.
+#[derive(Debug)]
+pub enum RefreshError {
+    /// The refresh token is invalid/revoked/expired — the account must
+    /// re-authenticate (`clauden login`). Don't keep retrying it.
+    Unauthorized(String),
+    /// A transient failure (network, 5xx) — safe to retry later.
+    Transient(String),
+}
+
+impl std::fmt::Display for RefreshError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RefreshError::Unauthorized(m) => write!(f, "unauthorized: {m}"),
+            RefreshError::Transient(m) => write!(f, "transient: {m}"),
+        }
+    }
+}
+impl std::error::Error for RefreshError {}
+
+/// Classify a non-success refresh response: an auth failure (dead refresh
+/// token) vs a transient one. `invalid_grant` is the OAuth standard error for a
+/// bad/expired refresh token; 401/403 are auth failures too.
+pub fn is_unauthorized_refresh(status: u16, body: &str) -> bool {
+    status == 401 || status == 403 || body.contains("invalid_grant") || body.contains("invalid_token")
+}
+
+/// Refresh an access token (the server may rotate the refresh token).
+pub async fn refresh(client: &reqwest::Client, refresh_token: &str) -> Result<Tokens, RefreshError> {
     let body = serde_json::json!({
         "grant_type": "refresh_token",
         "refresh_token": refresh_token,
@@ -163,15 +190,23 @@ pub async fn refresh(client: &reqwest::Client, refresh_token: &str) -> Result<To
         .json(&body)
         .send()
         .await
-        .context("refresh request failed")?;
+        .map_err(|e| RefreshError::Transient(format!("refresh request failed: {e}")))?;
 
     if !resp.status().is_success() {
-        let status = resp.status();
+        let status = resp.status().as_u16();
         let text = resp.text().await.unwrap_or_default();
-        bail!("token refresh failed: {status} {text}");
+        let msg = format!("{status} {text}");
+        return Err(if is_unauthorized_refresh(status, &text) {
+            RefreshError::Unauthorized(msg)
+        } else {
+            RefreshError::Transient(msg)
+        });
     }
 
-    let tr: TokenResponse = resp.json().await.context("parsing refresh response")?;
+    let tr: TokenResponse = resp
+        .json()
+        .await
+        .map_err(|e| RefreshError::Transient(format!("parsing refresh response: {e}")))?;
     let expires_at = normalize_expires_at(&tr);
     let refresh_token = tr
         .refresh_token

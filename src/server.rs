@@ -171,10 +171,10 @@ fn is_exhaustion(status: u16) -> bool {
     matches!(status, 429 | 402 | 529)
 }
 
-/// An account is usable if it's neither cooling down (reactive) nor near its
-/// quota limit (proactive).
+/// An account is usable if it's not cooling down (reactive), not near its quota
+/// limit (proactive), and not flagged as needing re-login (dead refresh token).
 fn available(a: &crate::config::Account, now: i64) -> bool {
-    !a.is_cooling_down(now) && !a.is_near_quota(now, QUOTA_THRESHOLD)
+    !a.needs_login && !a.is_cooling_down(now) && !a.is_near_quota(now, QUOTA_THRESHOLD)
 }
 
 /// Round-robin: next usable account, preferring `current`, skipping cooldowns.
@@ -308,13 +308,29 @@ async fn ensure_fresh(state: &AppState, idx: usize) -> Result<String> {
         acct.refresh_token.clone()
     };
 
-    let tokens = oauth::refresh(&state.client, &refresh_token).await?;
+    let tokens = match oauth::refresh(&state.client, &refresh_token).await {
+        Ok(t) => t,
+        Err(oauth::RefreshError::Unauthorized(msg)) => {
+            // Dead refresh token — flag the account so it's excluded from
+            // rotation and `clauden list` shows it needs re-login.
+            let mut cfg = state.cfg.lock().await;
+            if let Some(acct) = cfg.accounts.get_mut(idx) {
+                acct.needs_login = true;
+            }
+            persist(state, &cfg);
+            return Err(anyhow::anyhow!("account needs re-login: {msg}"));
+        }
+        Err(oauth::RefreshError::Transient(msg)) => {
+            return Err(anyhow::anyhow!("token refresh failed (transient): {msg}"));
+        }
+    };
 
     let mut cfg = state.cfg.lock().await;
     let acct = &mut cfg.accounts[idx];
     acct.access_token = tokens.access_token.clone();
     acct.refresh_token = tokens.refresh_token;
     acct.expires_at = tokens.expires_at;
+    acct.needs_login = false; // a successful refresh clears any prior flag
     persist(state, &cfg);
     Ok(tokens.access_token)
 }
@@ -611,6 +627,7 @@ mod tests {
             refresh_token: "r".into(),
             expires_at: i64::MAX,
             cooldown_until,
+            needs_login: false,
             usage_count: 0,
             util_5h: None,
             util_7d: None,
@@ -734,6 +751,27 @@ mod tests {
         h.insert("retry-after", "30".parse().unwrap());
         assert_eq!(retry_after_ms(&h), Some(30_000));
         assert_eq!(retry_after_ms(&reqwest::header::HeaderMap::new()), None);
+    }
+
+    #[test]
+    fn needs_login_account_is_unavailable() {
+        let now = 1000;
+        let mut a = acct("a", None);
+        a.needs_login = true;
+        assert!(!available(&a, now), "flagged account must be excluded");
+    }
+
+    #[test]
+    fn refresh_error_classification() {
+        use crate::oauth::is_unauthorized_refresh;
+        // Auth failures → unauthorized (don't retry, needs re-login)
+        assert!(is_unauthorized_refresh(401, ""));
+        assert!(is_unauthorized_refresh(403, ""));
+        assert!(is_unauthorized_refresh(400, r#"{"error":"invalid_grant"}"#));
+        // Transient → not unauthorized (keep retrying)
+        assert!(!is_unauthorized_refresh(500, "server error"));
+        assert!(!is_unauthorized_refresh(503, ""));
+        assert!(!is_unauthorized_refresh(429, "rate limited"));
     }
 
     #[test]
