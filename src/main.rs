@@ -425,7 +425,7 @@ fn spawn_claude(port: u16) -> Option<tokio::process::Child> {
             println!("  Launched Claude Code → {base}");
             println!(
                 "  {}",
-                ui::dim("if Claude Code warns about ANTHROPIC_API_KEY + claude.ai, run `/logout` inside it (won't touch clauden's accounts), then approve the key.")
+                ui::dim("clauden handles auth — don't use /login inside Claude Code. If it warns about ANTHROPIC_API_KEY + claude.ai, run /logout once and approve the key.")
             );
             Some(child)
         }

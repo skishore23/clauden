@@ -209,18 +209,32 @@ impl Config {
         // Atomic write: write to a temp file in the same dir, fsync, then
         // rename over the target. A crash mid-write can't corrupt the real
         // config (and lose your tokens) — you either get the old or new file.
-        let tmp = path.with_extension("json.tmp");
-        {
+        //
+        // The temp name carries our PID so concurrent writers (e.g. the proxy
+        // persisting usage while a CLI command mutates accounts) each own a
+        // private temp instead of clobbering a shared one. The final rename
+        // still serializes the visible result.
+        let tmp = path.with_extension(format!("json.{}.tmp", std::process::id()));
+        let write_tmp = || -> Result<()> {
             use std::io::Write;
-            let mut f = std::fs::File::create(&tmp)
+            // Create the temp 0600 from the start (unix) so the tokens never
+            // sit in a world-readable file, even briefly, before the rename.
+            let mut f = create_private(&tmp)
                 .with_context(|| format!("creating {}", tmp.display()))?;
             f.write_all(json.as_bytes())
                 .with_context(|| format!("writing {}", tmp.display()))?;
-            f.sync_all().ok();
+            f.sync_all()
+                .with_context(|| format!("syncing {}", tmp.display()))?;
+            Ok(())
+        };
+        // On any failure, don't leave a partial temp lying around.
+        if let Err(e) = write_tmp().and_then(|()| {
+            std::fs::rename(&tmp, path)
+                .with_context(|| format!("replacing {}", path.display()))
+        }) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
         }
-        restrict_permissions(&tmp);
-        std::fs::rename(&tmp, path)
-            .with_context(|| format!("replacing {}", path.display()))?;
         Ok(())
     }
 
@@ -229,15 +243,20 @@ impl Config {
     }
 }
 
+/// Create (and truncate) a file restricted to the owner (0600 on unix) from
+/// the moment it exists, so secrets never pass through a world-readable state.
 #[cfg(unix)]
-fn restrict_permissions(path: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-    if let Ok(meta) = std::fs::metadata(path) {
-        let mut perms = meta.permissions();
-        perms.set_mode(0o600);
-        let _ = std::fs::set_permissions(path, perms);
-    }
+fn create_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
 }
 
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &std::path::Path) {}
+fn create_private(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    std::fs::File::create(path)
+}
