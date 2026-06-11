@@ -138,7 +138,6 @@ Stored at `~/.claudeN/config.json` (created on first login, `0600` perms):
 ## Docs
 
 - [docs/USAGE.md](docs/USAGE.md) — full install/login/run walkthrough + troubleshooting
-- [docs/ROADMAP.md](docs/ROADMAP.md) — feature ideas grouped by effort vs. impact
 
 ## Development
 
