@@ -282,3 +282,13 @@ Run with `--verbose` to log every rotation, refresh, and upstream error:
 
 **Port already in use**
 Another process is on `:3131`. Use `--port` to pick a free one.
+
+**"Both claude.ai and ANTHROPIC_API_KEY set · auth may not work as expected"**
+This warning comes from *Claude Code*, not clauden. clauden launches Claude Code
+with `ANTHROPIC_API_KEY=clauden-proxy` (a placeholder that routes through the
+proxy), while Claude Code also sees your own `claude.ai` login — two credentials
+at once. clauden still works (the proxy replaces whatever Claude Code sends with
+the real OAuth token), but to clear the warning, run `/logout` **inside Claude
+Code** so it stops using its own login, then approve the API key on next launch.
+This only clears Claude Code's creds in `~/.claude/.credentials.json`; your
+clauden accounts in `~/.claudeN/config.json` are untouched.
