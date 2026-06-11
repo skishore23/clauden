@@ -201,9 +201,22 @@ impl Config {
                 .with_context(|| format!("creating {}", dir.display()))?;
         }
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(path, json)
-            .with_context(|| format!("writing {}", path.display()))?;
-        restrict_permissions(path);
+
+        // Atomic write: write to a temp file in the same dir, fsync, then
+        // rename over the target. A crash mid-write can't corrupt the real
+        // config (and lose your tokens) — you either get the old or new file.
+        let tmp = path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)
+                .with_context(|| format!("creating {}", tmp.display()))?;
+            f.write_all(json.as_bytes())
+                .with_context(|| format!("writing {}", tmp.display()))?;
+            f.sync_all().ok();
+        }
+        restrict_permissions(&tmp);
+        std::fs::rename(&tmp, path)
+            .with_context(|| format!("replacing {}", path.display()))?;
         Ok(())
     }
 
