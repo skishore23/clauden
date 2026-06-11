@@ -73,10 +73,17 @@ pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
 
     // Same account *and* same org → update in place (refresh tokens). Different
     // org under the same email → a distinct account.
+    //
+    // Both org tokens for one user share the same account.uuid, so org identity
+    // must distinguish them: prefer org_uuid, fall back to org_name when the
+    // profile doesn't return a uuid (otherwise two orgs would collapse).
     let existing = cfg.accounts.iter().position(|a| {
-        a.account_uuid.is_some()
-            && a.account_uuid == profile.uuid
-            && a.org_uuid == profile.org_uuid
+        let same_account = a.account_uuid.is_some() && a.account_uuid == profile.uuid;
+        let same_org = match (&a.org_uuid, &profile.org_uuid) {
+            (Some(x), Some(y)) => x == y,
+            _ => a.org_name == profile.org_name,
+        };
+        same_account && same_org
     });
 
     // Pick a unique, human display name.

@@ -423,10 +423,15 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         }
 
         if state.verbose {
-            eprintln!("[clauden] ← {status} via {account_name}");
+            // Show the unified rate-limit headers so it's clear whether the
+            // upstream is reporting quota for this account at all.
+            let u5 = header_str(resp.headers(), "anthropic-ratelimit-unified-5h-utilization");
+            let u7 = header_str(resp.headers(), "anthropic-ratelimit-unified-7d-utilization");
+            eprintln!("[clauden] ← {status} via {account_name}  (5h-util={u5} 7d-util={u7})");
         }
 
-        // Success (or a non-rotation error): record usage + quota, stream back.
+        // Success (or a non-rotation error): record usage + quota, persist so
+        // `clauden list` (a separate process) reflects it, then stream back.
         {
             let mut cfg = state.cfg.lock().await;
             if let Some(acct) = cfg.accounts.get_mut(idx) {
@@ -439,6 +444,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                     );
                 }
             }
+            persist(&state, &cfg);
         }
         return stream_response(resp);
     }
