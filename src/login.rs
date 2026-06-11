@@ -110,13 +110,24 @@ pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
 
     let tier = profile.tier.unwrap_or_else(|| "unknown".into());
     let verb = if updated { "Updated" } else { "Added" };
+    let org_label = profile
+        .org_name
+        .clone()
+        .map(|o| format!(" · org: {o}"))
+        .unwrap_or_default();
     println!(
         "\n  {} {} {} {}\n",
         ui::green("✓"),
         verb,
         ui::bold(&name),
-        ui::dim(&format!("({tier})"))
+        ui::dim(&format!("({tier}{org_label})"))
     );
+    if updated {
+        println!(
+            "  {}\n",
+            ui::dim("(this account+workspace already existed — tokens refreshed. To add a *different* workspace, use `clauden login --fresh` and pick the other one.)")
+        );
+    }
     Ok(())
 }
 
