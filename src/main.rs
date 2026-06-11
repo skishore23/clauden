@@ -50,6 +50,8 @@ enum Command {
     Use { name: String },
     /// Remove an account by name.
     Remove { name: String },
+    /// Rename an account (by name or list number) to a new display name.
+    Rename { selector: String, new_name: String },
     /// Get or set the account-selection strategy.
     ///
     /// One of: round-robin, least-used, session-sticky. Omit to show current.
@@ -75,6 +77,7 @@ async fn main() -> Result<()> {
         Some(Command::List) | Some(Command::Status) => cmd_list(),
         Some(Command::Use { name }) => cmd_use(&name),
         Some(Command::Remove { name }) => cmd_remove(&name),
+        Some(Command::Rename { selector, new_name }) => cmd_rename(&selector, &new_name),
         Some(Command::Strategy { name }) => cmd_strategy(name),
         Some(Command::Update) => cmd_update(),
         Some(Command::Run) | None => cmd_run(cli.port, cli.no_launch).await,
@@ -194,8 +197,8 @@ fn cmd_list() -> Result<()> {
         println!(
             "  │ {} │ {} │ {} │ {} │ {} │ {} │ {} │",
             ui::pad_end(&idx, w_idx),
-            ui::pad_end(&a.name, name_w),
-            ui::pad_end(&org, org_w),
+            ui::fit(&a.name, name_w),
+            ui::fit(&org, org_w),
             ui::pad_end(&tier, w_tier),
             ui::pad_end(&status, w_status),
             ui::pad_end(&quota, w_quota),
@@ -261,6 +264,32 @@ fn cmd_use(selector: &str) -> Result<()> {
                 ui::red("✗"),
                 ui::bold("clauden list")
             );
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_rename(selector: &str, new_name: &str) -> Result<()> {
+    let mut cfg = Config::load()?;
+    let new_name = new_name.trim();
+    if new_name.is_empty() {
+        eprintln!("  {} New name can't be empty.", ui::red("✗"));
+        std::process::exit(1);
+    }
+    match resolve_account(&cfg, selector) {
+        Some(i) => {
+            if cfg.accounts.iter().enumerate().any(|(j, a)| j != i && a.name == new_name) {
+                eprintln!("  {} An account named '{new_name}' already exists.", ui::red("✗"));
+                std::process::exit(1);
+            }
+            let old = cfg.accounts[i].name.clone();
+            cfg.accounts[i].name = new_name.to_string();
+            cfg.save()?;
+            println!("  {} Renamed {} → {}", ui::green("✓"), ui::dim(&old), ui::bold(new_name));
+            Ok(())
+        }
+        None => {
+            eprintln!("  {} No account '{selector}'.", ui::red("✗"));
             std::process::exit(1);
         }
     }

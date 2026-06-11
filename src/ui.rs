@@ -70,6 +70,20 @@ pub fn pad_end(s: &str, width: usize) -> String {
     }
 }
 
+/// Fit a plain string into exactly `width` columns: truncate with an ellipsis
+/// if too long, pad on the right if too short. (Assumes no ANSI codes.)
+pub fn fit(s: &str, width: usize) -> String {
+    let count = s.chars().count();
+    if count <= width {
+        return pad_end(s, width);
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let truncated: String = s.chars().take(width - 1).collect();
+    format!("{truncated}…")
+}
+
 /// Pad `s` on the left to `width` visible columns.
 pub fn pad_start(s: &str, width: usize) -> String {
     let v = visible_len(s);

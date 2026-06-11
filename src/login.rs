@@ -89,7 +89,7 @@ pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
     // Pick a unique, human display name.
     let name = match &existing {
         Some(i) => cfg.accounts[*i].name.clone(),
-        None => unique_name(cfg, &email, profile.org_name.as_deref()),
+        None => unique_name(cfg, &email),
     };
 
     let account = Account {
@@ -139,18 +139,13 @@ pub async fn run(cfg: &mut Config, fresh: bool) -> Result<()> {
 }
 
 /// Build a display name that's unique among existing accounts. Prefers the bare
-/// email; on collision appends the org name, then a numeric suffix.
-fn unique_name(cfg: &Config, email: &str, org_name: Option<&str>) -> String {
+/// email; on collision (e.g. a second workspace for the same email) appends a
+/// short numeric suffix. The workspace itself is shown in the Org column.
+fn unique_name(cfg: &Config, email: &str) -> String {
     let taken = |n: &str| cfg.accounts.iter().any(|a| a.name == n);
 
     if !taken(email) {
         return email.to_string();
-    }
-    if let Some(org) = org_name {
-        let candidate = format!("{email} ({org})");
-        if !taken(&candidate) {
-            return candidate;
-        }
     }
     let mut n = 2;
     loop {
