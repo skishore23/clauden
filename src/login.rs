@@ -1,0 +1,203 @@
+//! Interactive OAuth login: opens the browser, captures the callback on a
+//! local port, exchanges the code, fetches the profile, and saves the account.
+
+use anyhow::{anyhow, Context, Result};
+use std::sync::mpsc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
+
+use crate::config::{Account, Config};
+use crate::oauth;
+use crate::ui;
+
+/// Run the full login flow and persist the new account into `cfg`.
+pub async fn run(cfg: &mut Config) -> Result<()> {
+    let pkce = oauth::generate_pkce();
+
+    // Bind a local callback server on an ephemeral port.
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .context("binding local callback server")?;
+    let port = listener.local_addr()?.port();
+    let redirect_uri = format!("http://localhost:{port}/callback");
+
+    let auth_url = oauth::authorize_url(&pkce.challenge, &pkce.state, &redirect_uri);
+
+    println!(
+        "\n  {}  {}",
+        ui::magenta("(• ◡ -)"),
+        ui::bold("Opening your browser to log in to Claude…")
+    );
+    println!(
+        "  {} {}\n",
+        ui::dim("If it doesn't open, paste this URL:"),
+        ui::dim(&auth_url)
+    );
+    let _ = webbrowser::open(&auth_url);
+    println!("  {} waiting for you to approve in the browser…", ui::cyan("⠿"));
+
+    // Wait for the browser redirect carrying ?code=…&state=…
+    let (code, returned_state) = wait_for_callback(listener).await?;
+    if returned_state != pkce.state {
+        return Err(anyhow!("OAuth state mismatch — aborting for safety"));
+    }
+
+    let client = reqwest::Client::new();
+    let tokens = oauth::exchange_code(&client, &code, &pkce.state, &pkce.verifier, &redirect_uri)
+        .await
+        .context("exchanging authorization code")?;
+
+    let profile = oauth::fetch_profile(&client, &tokens.access_token)
+        .await
+        .unwrap_or(oauth::Profile {
+            uuid: None,
+            email: None,
+            tier: None,
+        });
+
+    let name = profile
+        .email
+        .clone()
+        .unwrap_or_else(|| format!("account-{}", cfg.accounts.len() + 1));
+
+    // Replace an existing account with the same uuid/name (dedupe).
+    let account = Account {
+        name: name.clone(),
+        account_uuid: profile.uuid.clone(),
+        tier: profile.tier.clone(),
+        access_token: tokens.access_token,
+        refresh_token: tokens.refresh_token,
+        expires_at: tokens.expires_at,
+        cooldown_until: None,
+        usage_count: 0,
+        util_5h: None,
+        util_7d: None,
+        reset_5h: None,
+        reset_7d: None,
+    };
+
+    let existing = cfg.accounts.iter().position(|a| {
+        a.name == account.name
+            || (a.account_uuid.is_some() && a.account_uuid == account.account_uuid)
+    });
+    match existing {
+        Some(i) => cfg.accounts[i] = account,
+        None => cfg.accounts.push(account),
+    }
+
+    let tier = profile.tier.unwrap_or_else(|| "unknown".into());
+    println!(
+        "\n  {} Added {} {}\n",
+        ui::green("✓"),
+        ui::bold(&name),
+        ui::dim(&format!("({tier})"))
+    );
+    Ok(())
+}
+
+/// Accept a single connection and parse the OAuth code/state from the request line.
+async fn wait_for_callback(listener: TcpListener) -> Result<(String, String)> {
+    // Run the blocking-ish accept in this async fn with a timeout.
+    let (result_tx, result_rx) = mpsc::channel();
+
+    let accept = async {
+        let (mut stream, _) = listener.accept().await?;
+        let mut buf = vec![0u8; 8192];
+        let n = stream.read(&mut buf).await?;
+        let request = String::from_utf8_lossy(&buf[..n]).to_string();
+
+        let (code, state) = parse_callback(&request)
+            .ok_or_else(|| anyhow!("callback missing code/state"))?;
+
+        // Respond to the browser, then redirect to the official success page.
+        let body = "<html><body style=\"font-family:sans-serif;text-align:center;margin-top:4rem\">\
+            <h2>✓ Logged in</h2><p>You can close this tab and return to your terminal.</p>\
+            <script>setTimeout(function(){location.href='https://platform.claude.com/oauth/code/success?app=claude-code'},1200)</script>\
+            </body></html>";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+        let _ = stream.flush().await;
+
+        let _ = result_tx.send((code, state));
+        Ok::<(), anyhow::Error>(())
+    };
+
+    tokio::select! {
+        res = accept => {
+            res?;
+        }
+        _ = tokio::time::sleep(std::time::Duration::from_secs(300)) => {
+            return Err(anyhow!("login timed out after 5 minutes"));
+        }
+    }
+
+    result_rx
+        .recv()
+        .map_err(|_| anyhow!("failed to receive OAuth callback"))
+}
+
+/// Extract `code` and `state` query params from the raw HTTP request line.
+fn parse_callback(request: &str) -> Option<(String, String)> {
+    let first_line = request.lines().next()?;
+    // e.g. "GET /callback?code=abc&state=xyz HTTP/1.1"
+    let path = first_line.split_whitespace().nth(1)?;
+    let query = path.split_once('?')?.1;
+
+    let mut code = None;
+    let mut state = None;
+    for pair in query.split('&') {
+        if let Some((k, v)) = pair.split_once('=') {
+            let decoded = urldecode(v);
+            match k {
+                "code" => code = Some(decoded),
+                "state" => state = Some(decoded),
+                _ => {}
+            }
+        }
+    }
+    Some((code?, state?))
+}
+
+/// Minimal percent-decoding for OAuth callback values.
+fn urldecode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let h = hex_val(bytes[i + 1]);
+                let l = hex_val(bytes[i + 2]);
+                if let (Some(h), Some(l)) = (h, l) {
+                    out.push(h * 16 + l);
+                    i += 3;
+                    continue;
+                }
+                out.push(bytes[i]);
+                i += 1;
+            }
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}

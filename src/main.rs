@@ -1,0 +1,311 @@
+//! clauden — multi-account Claude OAuth rotating proxy.
+//!
+//! Log in to several Claude subscriptions, point Claude Code at the proxy, and
+//! it transparently rotates accounts whenever one hits a rate limit.
+
+use anyhow::Result;
+use clap::{Parser, Subcommand};
+
+use clauden::config::{Config, Strategy};
+use clauden::ui;
+use clauden::{login, server};
+
+#[derive(Parser)]
+#[command(
+    name = "clauden",
+    about = "Multi-account Claude OAuth rotating proxy — never hit a rate limit again",
+    version
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
+    /// Port to listen on (overrides config).
+    #[arg(long, global = true)]
+    port: Option<u16>,
+
+    /// Don't auto-launch Claude Code; just run the proxy.
+    #[arg(long, global = true)]
+    no_launch: bool,
+
+    /// Verbose request logging to stderr.
+    #[arg(long, global = true)]
+    verbose: bool,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Add a Claude account via browser OAuth login.
+    Login,
+    /// List configured accounts and their status.
+    List,
+    /// Show proxy + account status.
+    Status,
+    /// Switch the active account by name.
+    Use { name: String },
+    /// Remove an account by name.
+    Remove { name: String },
+    /// Get or set the account-selection strategy.
+    ///
+    /// One of: round-robin, least-used, session-sticky. Omit to show current.
+    Strategy { name: Option<String> },
+    /// Run the proxy (default if no command given).
+    Run,
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    if cli.verbose {
+        std::env::set_var("CLAUDEN_VERBOSE", "1");
+    }
+
+    match cli.command {
+        Some(Command::Login) => cmd_login().await,
+        Some(Command::List) | Some(Command::Status) => cmd_list(),
+        Some(Command::Use { name }) => cmd_use(&name),
+        Some(Command::Remove { name }) => cmd_remove(&name),
+        Some(Command::Strategy { name }) => cmd_strategy(name),
+        Some(Command::Run) | None => cmd_run(cli.port, cli.no_launch).await,
+    }
+}
+
+async fn cmd_login() -> Result<()> {
+    let mut cfg = Config::load()?;
+    login::run(&mut cfg).await?;
+    cfg.save()?;
+    println!(
+        "  {} {} account(s) configured. Run {} to see them.\n",
+        ui::dim("›"),
+        ui::bold(&cfg.accounts.len().to_string()),
+        ui::bold("clauden list")
+    );
+    Ok(())
+}
+
+fn cmd_list() -> Result<()> {
+    let cfg = Config::load()?;
+
+    // Header banner.
+    println!();
+    println!(
+        "  {}  {}      {} {}",
+        ui::magenta("(• ◡ -)"),
+        ui::bold("clauden"),
+        ui::dim("strategy:"),
+        ui::cyan(cfg.strategy.label())
+    );
+    println!();
+
+    if cfg.accounts.is_empty() {
+        println!(
+            "  {} No accounts yet. Run {} to add one.\n",
+            ui::yellow("›"),
+            ui::bold("clauden login")
+        );
+        return Ok(());
+    }
+
+    let now = now_ms();
+
+    // Compute the account-name column width (cap to keep it tidy).
+    let name_w = cfg
+        .accounts
+        .iter()
+        .map(|a| a.name.chars().count())
+        .max()
+        .unwrap_or(7)
+        .clamp(7, 32);
+
+    // Column widths (visible).
+    let (w_mark, w_tier, w_status, w_quota, w_reqs) = (1, 4, 14, 16, 6);
+
+    let line = |l: &str, m: &str, r: &str| {
+        format!(
+            "{l}{}{m}{}{m}{}{m}{}{m}{}{m}{}{r}",
+            "─".repeat(w_mark + 2),
+            "─".repeat(name_w + 2),
+            "─".repeat(w_tier + 2),
+            "─".repeat(w_status + 2),
+            "─".repeat(w_quota + 2),
+            "─".repeat(w_reqs + 2),
+        )
+    };
+
+    let header = format!(
+        "│ {} │ {} │ {} │ {} │ {} │ {} │",
+        ui::pad_end("", w_mark),
+        ui::dim(&ui::pad_end("Account", name_w)),
+        ui::dim(&ui::pad_end("Tier", w_tier)),
+        ui::dim(&ui::pad_end("Status", w_status)),
+        ui::dim(&ui::pad_end("Quota", w_quota)),
+        ui::dim(&ui::pad_start("Reqs", w_reqs)),
+    );
+
+    println!("  {}", ui::dim(&line("╭", "┬", "╮")));
+    println!("  {header}");
+    println!("  {}", ui::dim(&line("├", "┼", "┤")));
+
+    for (i, a) in cfg.accounts.iter().enumerate() {
+        let marker = if i == cfg.current {
+            ui::cyan("▶")
+        } else {
+            " ".to_string()
+        };
+        let tier = a.tier.clone().unwrap_or_else(|| "—".into());
+
+        let status = if a.is_cooling_down(now) {
+            let secs = (a.cooldown_until.unwrap_or(0) - now).max(0) / 1000;
+            ui::status_dot(&format!("cooldown {}", fmt_dur(secs)), ui::Status::Down)
+        } else if a.is_near_quota(now, 0.95) {
+            ui::status_dot("near-quota", ui::Status::Warn)
+        } else {
+            ui::status_dot("ready", ui::Status::Ready)
+        };
+
+        let quota = ui::quota_bar(a.peak_utilization(now));
+
+        println!(
+            "  │ {} │ {} │ {} │ {} │ {} │ {} │",
+            ui::pad_end(&marker, w_mark),
+            ui::pad_end(&a.name, name_w),
+            ui::pad_end(&tier, w_tier),
+            ui::pad_end(&status, w_status),
+            ui::pad_end(&quota, w_quota),
+            ui::pad_start(&a.usage_count.to_string(), w_reqs),
+        );
+    }
+
+    println!("  {}", ui::dim(&line("╰", "┴", "╯")));
+    println!();
+    Ok(())
+}
+
+fn cmd_strategy(name: Option<String>) -> Result<()> {
+    let mut cfg = Config::load()?;
+    match name {
+        None => {
+            println!("  Strategy: {}", ui::cyan(cfg.strategy.label()));
+            println!(
+                "  {}",
+                ui::dim("Options:  round-robin | least-used | session-sticky")
+            );
+        }
+        Some(n) => match Strategy::parse(&n) {
+            Some(s) => {
+                cfg.strategy = s;
+                cfg.save()?;
+                println!("  {} Strategy set to {}", ui::green("✓"), ui::cyan(s.label()));
+            }
+            None => {
+                eprintln!("  {} Unknown strategy '{n}'.", ui::red("✗"));
+                eprintln!("  {}", ui::dim("Use: round-robin, least-used, session-sticky"));
+                std::process::exit(1);
+            }
+        },
+    }
+    Ok(())
+}
+
+fn cmd_use(name: &str) -> Result<()> {
+    let mut cfg = Config::load()?;
+    match cfg.find_account(name) {
+        Some(i) => {
+            cfg.current = i;
+            cfg.save()?;
+            println!("  {} Active account: {}", ui::cyan("▶"), ui::bold(name));
+            Ok(())
+        }
+        None => {
+            eprintln!("  {} No account named '{name}'. Run {}.", ui::red("✗"), ui::bold("clauden list"));
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_remove(name: &str) -> Result<()> {
+    let mut cfg = Config::load()?;
+    match cfg.find_account(name) {
+        Some(i) => {
+            cfg.accounts.remove(i);
+            if cfg.current >= cfg.accounts.len() {
+                cfg.current = 0;
+            }
+            cfg.save()?;
+            println!("  {} Removed {}", ui::green("✓"), ui::bold(name));
+            Ok(())
+        }
+        None => {
+            eprintln!("  {} No account named '{name}'.", ui::red("✗"));
+            std::process::exit(1);
+        }
+    }
+}
+
+async fn cmd_run(port: Option<u16>, no_launch: bool) -> Result<()> {
+    let mut cfg = Config::load()?;
+    if let Some(p) = port {
+        cfg.port = p;
+    }
+    if cfg.accounts.is_empty() {
+        eprintln!(
+            "  {} No accounts configured. Run {} first.",
+            ui::yellow("›"),
+            ui::bold("clauden login")
+        );
+        std::process::exit(1);
+    }
+
+    let port = cfg.port;
+    println!(
+        "\n  {}  {}  {}",
+        ui::magenta("(• ◡ -)"),
+        ui::bold("clauden"),
+        ui::dim(&format!(
+            "{} account(s) · {} strategy",
+            cfg.accounts.len(),
+            cfg.strategy.label()
+        ))
+    );
+    if !no_launch {
+        spawn_claude(port);
+    }
+
+    server::serve(cfg).await
+}
+
+/// Launch Claude Code pointed at the proxy, if `claude` is on PATH.
+fn spawn_claude(port: u16) {
+    use std::process::Command;
+    let base = format!("http://127.0.0.1:{port}");
+    match Command::new("claude")
+        .env("ANTHROPIC_BASE_URL", &base)
+        .env("ANTHROPIC_API_KEY", "clauden-proxy")
+        .spawn()
+    {
+        Ok(_) => println!("  Launched Claude Code → {base}"),
+        Err(_) => println!(
+            "  (claude not found on PATH; set ANTHROPIC_BASE_URL={base} manually)"
+        ),
+    }
+}
+
+fn now_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Compact human duration: `45s`, `12m`, `2h`.
+fn fmt_dur(secs: i64) -> String {
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{}h", secs / 3600)
+    }
+}
