@@ -474,9 +474,9 @@ fn stream_response(resp: reqwest::Response) -> Response {
         }
     }
 
-    let stream = resp.bytes_stream().map(|chunk| {
-        chunk.map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
-    });
+    let stream = resp
+        .bytes_stream()
+        .map(|chunk| chunk.map_err(std::io::Error::other));
     let body = Body::from_stream(stream);
 
     builder
