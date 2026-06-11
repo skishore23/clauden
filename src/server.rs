@@ -97,19 +97,37 @@ pub fn router(state: AppState) -> Router {
     Router::new().fallback(any(handle)).with_state(state)
 }
 
-pub async fn serve(cfg: Config) -> Result<()> {
+/// Bind the proxy's listening port and build its state. Returns a friendly
+/// error if the port is already taken (e.g. another `clauden` is running).
+/// Binding here — before the caller launches Claude Code — means a port clash
+/// fails fast without leaving an orphaned Claude process.
+pub async fn bind(cfg: Config) -> Result<(tokio::net::TcpListener, AppState)> {
     let port = cfg.port;
     let verbose = std::env::var("CLAUDEN_VERBOSE").is_ok();
     let upstream = std::env::var("CLAUDEN_UPSTREAM").unwrap_or_else(|_| UPSTREAM.to_string());
-    println!("  strategy: {}", cfg.strategy.label());
 
     let config_path = Config::path().ok();
     let state = make_state(cfg, upstream, verbose, config_path);
-    let app = router(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => l,
+        Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+            return Err(anyhow::anyhow!(
+                "port {port} is already in use — is clauden already running? \
+                 Run plain `claude` against the existing proxy, or use `--port <N>` for a new one."
+            ));
+        }
+        Err(e) => return Err(e.into()),
+    };
+    Ok((listener, state))
+}
+
+/// Serve the proxy on an already-bound listener.
+pub async fn run(listener: tokio::net::TcpListener, state: AppState) -> Result<()> {
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
     println!("  clauden proxy listening on http://127.0.0.1:{port}");
+    let app = router(state);
     axum::serve(listener, app).await?;
     Ok(())
 }

@@ -340,6 +340,17 @@ async fn cmd_run(port: Option<u16>, no_launch: bool) -> Result<()> {
             cfg.strategy.label()
         ))
     );
+    // Bind the port FIRST so a clash (e.g. another clauden already running)
+    // fails before we launch Claude Code — otherwise we'd orphan a Claude
+    // process pointing at someone else's proxy.
+    let (listener, state) = match server::bind(cfg).await {
+        Ok(x) => x,
+        Err(e) => {
+            eprintln!("\n  {} {e}", ui::red("✗"));
+            std::process::exit(1);
+        }
+    };
+
     // Launch Claude Code as a child and tie our lifecycle to it: when Claude
     // exits (or the user hits Ctrl-C) we shut the proxy down too. Without this
     // the proxy outlives Claude and the terminal looks "stuck" — Claude's TUI
@@ -347,7 +358,7 @@ async fn cmd_run(port: Option<u16>, no_launch: bool) -> Result<()> {
     // clauden could see.
     let child = if no_launch { None } else { spawn_claude(port) };
 
-    let server = server::serve(cfg);
+    let server = server::run(listener, state);
     tokio::pin!(server);
 
     match child {
