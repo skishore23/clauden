@@ -89,7 +89,9 @@ async fn start_mock(rules: &[(&str, Rule)]) -> (String, MockState) {
 // ----------------------------------------------------------------------------
 
 async fn start_proxy(cfg: Config, upstream: String) -> (String, Arc<tokio::sync::Mutex<Config>>) {
-    let state = clauden::server::make_state(cfg, upstream, false);
+    // config_path = None → the proxy keeps state in memory and never writes to
+    // the real ~/.claudeN/config.json during tests.
+    let state = clauden::server::make_state(cfg, upstream, false, None);
     let cfg_handle = state.cfg.clone();
     let app = clauden::server::router(state);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

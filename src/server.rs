@@ -48,6 +48,9 @@ pub struct AppState {
     pub client: reqwest::Client,
     /// Base URL of the upstream API (overridable for tests).
     pub upstream: String,
+    /// Where to persist config on state changes. `None` disables writes
+    /// entirely (used by tests so they never touch the user's real config).
+    pub config_path: Option<std::path::PathBuf>,
     /// Serializes token refreshes so a rotated refresh-token isn't raced.
     pub refresh_lock: Arc<Mutex<()>>,
     /// session-sticky map: conversation key → (account index, last-seen ms).
@@ -56,16 +59,30 @@ pub struct AppState {
 }
 
 /// Build shared proxy state. `upstream` is the API base URL (no trailing slash).
-pub fn make_state(cfg: Config, upstream: String, verbose: bool) -> AppState {
+/// `config_path` of `None` means changes are kept in memory only (tests).
+pub fn make_state(
+    cfg: Config,
+    upstream: String,
+    verbose: bool,
+    config_path: Option<std::path::PathBuf>,
+) -> AppState {
     AppState {
         cfg: Arc::new(Mutex::new(cfg)),
         client: reqwest::Client::builder()
             .build()
             .expect("building http client"),
         upstream,
+        config_path,
         refresh_lock: Arc::new(Mutex::new(())),
         sticky: Arc::new(Mutex::new(HashMap::new())),
         verbose,
+    }
+}
+
+/// Persist config to disk only if this state has a configured path.
+fn persist(state: &AppState, cfg: &Config) {
+    if let Some(path) = &state.config_path {
+        let _ = cfg.save_to(path);
     }
 }
 
@@ -80,7 +97,8 @@ pub async fn serve(cfg: Config) -> Result<()> {
     let upstream = std::env::var("CLAUDEN_UPSTREAM").unwrap_or_else(|_| UPSTREAM.to_string());
     println!("  strategy: {}", cfg.strategy.label());
 
-    let state = make_state(cfg, upstream, verbose);
+    let config_path = Config::path().ok();
+    let state = make_state(cfg, upstream, verbose, config_path);
     let app = router(state);
 
     let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -248,7 +266,7 @@ async fn ensure_fresh(state: &AppState, idx: usize) -> Result<String> {
     acct.access_token = tokens.access_token.clone();
     acct.refresh_token = tokens.refresh_token;
     acct.expires_at = tokens.expires_at;
-    let _ = cfg.save();
+    persist(state, &cfg);
     Ok(tokens.access_token)
 }
 
@@ -382,7 +400,7 @@ async fn cool_down_and_rotate(state: &AppState, idx: usize, cooldown_ms: i64) {
     if n > 0 {
         cfg.current = (idx + 1) % n;
     }
-    let _ = cfg.save();
+    persist(state, &cfg);
 }
 
 /// Parse `retry-after` (seconds) into milliseconds.

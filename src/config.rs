@@ -189,16 +189,21 @@ impl Config {
         Ok(cfg)
     }
 
-    /// Persist config to disk (best-effort directory creation, 0600 perms).
+    /// Persist config to the default location (`~/.claudeN/config.json`).
     pub fn save(&self) -> Result<()> {
-        let dir = Self::dir()?;
-        std::fs::create_dir_all(&dir)
-            .with_context(|| format!("creating {}", dir.display()))?;
-        let path = Self::path()?;
+        self.save_to(&Self::path()?)
+    }
+
+    /// Persist config to an explicit path (best-effort dir creation, 0600 perms).
+    pub fn save_to(&self, path: &std::path::Path) -> Result<()> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)
+                .with_context(|| format!("creating {}", dir.display()))?;
+        }
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json)
+        std::fs::write(path, json)
             .with_context(|| format!("writing {}", path.display()))?;
-        restrict_permissions(&path);
+        restrict_permissions(path);
         Ok(())
     }
 
