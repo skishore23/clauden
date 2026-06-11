@@ -126,7 +126,7 @@ pub async fn bind(cfg: Config) -> Result<(tokio::net::TcpListener, AppState)> {
 /// Serve the proxy on an already-bound listener.
 pub async fn run(listener: tokio::net::TcpListener, state: AppState) -> Result<()> {
     let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-    println!("  clauden proxy listening on http://127.0.0.1:{port}");
+    log!("[clauden] proxy listening on http://127.0.0.1:{port}");
     let app = router(state);
     axum::serve(listener, app).await?;
     Ok(())
@@ -159,7 +159,7 @@ fn log_request(method: &str, path: &str, headers: &HeaderMap, body: &[u8]) {
         .get("anthropic-beta")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("(none)");
-    eprintln!(
+    log!(
         "[clauden] → {method} {path} model={model} stream={stream} body={}K beta={beta}",
         body.len() / 1024
     );
@@ -365,7 +365,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             Ok(t) => t,
             Err(e) => {
                 if state.verbose {
-                    eprintln!("[clauden] token refresh failed for account {idx}: {e}");
+                    log!("[clauden] token refresh failed for account {idx}: {e}");
                 }
                 // Refresh failures are usually transient (network) — short cooldown.
                 cool_down_and_rotate(&state, idx, TRANSIENT_COOLDOWN_MS).await;
@@ -401,7 +401,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             Ok(r) => r,
             Err(e) => {
                 if state.verbose {
-                    eprintln!("[clauden] upstream error on {account_name}: {e}");
+                    log!("[clauden] upstream error on {account_name}: {e}");
                 }
                 // Network error reaching the upstream — not the account's fault.
                 cool_down_and_rotate(&state, idx, TRANSIENT_COOLDOWN_MS).await;
@@ -430,7 +430,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 let util7 = header_str(resp.headers(), "anthropic-ratelimit-unified-7d-utilization");
                 let body = resp.text().await.unwrap_or_default();
                 let snippet: String = body.chars().take(500).collect();
-                eprintln!(
+                log!(
                     "[clauden] ⚡ {account_name} hit {status} (5h-util={util5} 7d-util={util7}); \
                      cooling {}s — upstream: {snippet}",
                     cooldown / 1000
@@ -445,7 +445,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             // upstream is reporting quota for this account at all.
             let u5 = header_str(resp.headers(), "anthropic-ratelimit-unified-5h-utilization");
             let u7 = header_str(resp.headers(), "anthropic-ratelimit-unified-7d-utilization");
-            eprintln!("[clauden] ← {status} via {account_name}  (5h-util={u5} 7d-util={u7})");
+            log!("[clauden] ← {status} via {account_name}  (5h-util={u5} 7d-util={u7})");
         }
 
         // Success (or a non-rotation error): record usage + quota, persist so
@@ -456,7 +456,7 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 acct.usage_count = acct.usage_count.saturating_add(1);
                 read_quota(acct, resp.headers());
                 if state.verbose && acct.is_near_quota(now_ms(), QUOTA_THRESHOLD) {
-                    eprintln!(
+                    log!(
                         "[clauden] {} near quota (5h={:?} 7d={:?}); will switch next request",
                         acct.name, acct.util_5h, acct.util_7d
                     );

@@ -340,6 +340,24 @@ async fn cmd_run(port: Option<u16>, no_launch: bool) -> Result<()> {
             cfg.strategy.label()
         ))
     );
+    // One-command mode (launching Claude Code): route clauden's own logs to a
+    // file so they don't scribble over Claude Code's full-screen TUI, and turn
+    // on rich logging so the file is useful. Watch it with:
+    //   tail -f ~/.claudeN/clauden.log
+    if !no_launch {
+        if let Ok(dir) = Config::dir() {
+            let log_path = dir.join("clauden.log");
+            let _ = std::fs::create_dir_all(&dir);
+            clauden::log::to_file(&log_path);
+            std::env::set_var("CLAUDEN_VERBOSE", "1");
+            println!(
+                "  {} {}",
+                ui::dim("logs →"),
+                ui::dim(&format!("{} (tail -f to watch rotation)", log_path.display()))
+            );
+        }
+    }
+
     // Bind the port FIRST so a clash (e.g. another clauden already running)
     // fails before we launch Claude Code — otherwise we'd orphan a Claude
     // process pointing at someone else's proxy.

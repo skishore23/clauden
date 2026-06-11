@@ -78,6 +78,13 @@ clauden list           # show accounts + status
 clauden                # run proxy on :3131 and launch Claude Code
 ```
 
+In one-command mode, clauden keeps the terminal clean for Claude Code's UI and
+writes its own logs to `~/.claudeN/clauden.log`. Watch rotation live with:
+
+```bash
+tail -f ~/.claudeN/clauden.log
+```
+
 Other commands:
 
 | Command | Effect |

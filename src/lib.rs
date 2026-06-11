@@ -3,6 +3,8 @@
 //! The binary in `main.rs` is a thin CLI over these modules; integration tests
 //! drive the proxy directly via [`server::router`] + [`server::make_state`].
 
+#[macro_use]
+pub mod log;
 pub mod config;
 pub mod login;
 pub mod oauth;
