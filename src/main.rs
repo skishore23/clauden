@@ -292,26 +292,66 @@ async fn cmd_run(port: Option<u16>, no_launch: bool) -> Result<()> {
             cfg.strategy.label()
         ))
     );
-    if !no_launch {
-        spawn_claude(port);
-    }
+    // Launch Claude Code as a child and tie our lifecycle to it: when Claude
+    // exits (or the user hits Ctrl-C) we shut the proxy down too. Without this
+    // the proxy outlives Claude and the terminal looks "stuck" — Claude's TUI
+    // runs in raw mode, so Ctrl-C reaches it as a keystroke, never as a signal
+    // clauden could see.
+    let child = if no_launch { None } else { spawn_claude(port) };
 
-    server::serve(cfg).await
+    let server = server::serve(cfg);
+    tokio::pin!(server);
+
+    match child {
+        Some(mut child) => {
+            tokio::select! {
+                res = &mut server => res,
+                _ = child.wait() => {
+                    println!(
+                        "\n  {} Claude Code exited — shutting down the proxy.",
+                        ui::dim("›")
+                    );
+                    Ok(())
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    let _ = child.start_kill();
+                    println!("\n  {} Interrupted — shutting down.", ui::dim("›"));
+                    Ok(())
+                }
+            }
+        }
+        None => {
+            tokio::select! {
+                res = &mut server => res,
+                _ = tokio::signal::ctrl_c() => {
+                    println!("\n  {} Interrupted — shutting down.", ui::dim("›"));
+                    Ok(())
+                }
+            }
+        }
+    }
 }
 
-/// Launch Claude Code pointed at the proxy, if `claude` is on PATH.
-fn spawn_claude(port: u16) {
-    use std::process::Command;
+/// Launch Claude Code pointed at the proxy, if `claude` is on PATH. Returns the
+/// child handle so the caller can shut down when Claude Code does. `kill_on_drop`
+/// makes sure Claude is reaped if the proxy exits for any other reason.
+fn spawn_claude(port: u16) -> Option<tokio::process::Child> {
+    use tokio::process::Command;
     let base = format!("http://127.0.0.1:{port}");
     match Command::new("claude")
         .env("ANTHROPIC_BASE_URL", &base)
         .env("ANTHROPIC_API_KEY", "clauden-proxy")
+        .kill_on_drop(true)
         .spawn()
     {
-        Ok(_) => println!("  Launched Claude Code → {base}"),
-        Err(_) => println!(
-            "  (claude not found on PATH; set ANTHROPIC_BASE_URL={base} manually)"
-        ),
+        Ok(child) => {
+            println!("  Launched Claude Code → {base}");
+            Some(child)
+        }
+        Err(_) => {
+            println!("  (claude not found on PATH; set ANTHROPIC_BASE_URL={base} manually)");
+            None
+        }
     }
 }
 

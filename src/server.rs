@@ -21,8 +21,14 @@ use crate::config::{Config, Strategy};
 use crate::oauth;
 
 const UPSTREAM: &str = "https://api.anthropic.com";
-/// Default cooldown when the upstream gives no `retry-after`.
+/// Cooldown for a genuine per-account limit (429/402) with no `retry-after`.
+/// Long enough that we actually stop hammering an exhausted account.
 const DEFAULT_COOLDOWN_MS: i64 = 60_000;
+/// Cooldown for transient, *server-side* conditions that aren't the account's
+/// fault — 529 overloaded, network blips, a failed token refresh. Short, so one
+/// upstream hiccup can't park every account for a full minute and then surface a
+/// bogus "all accounts are rate-limited" to the client.
+const TRANSIENT_COOLDOWN_MS: i64 = 3_000;
 /// How long a conversation stays pinned to an account (session-sticky).
 const STICKY_TTL_MS: i64 = 60 * 60 * 1000;
 /// Proactively switch away from an account at/over this quota utilization.
@@ -314,8 +320,8 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 if state.verbose {
                     eprintln!("[clauden] token refresh failed for account {idx}: {e}");
                 }
-                // Cool this one down briefly and try the next.
-                cool_down_and_rotate(&state, idx, DEFAULT_COOLDOWN_MS).await;
+                // Refresh failures are usually transient (network) — short cooldown.
+                cool_down_and_rotate(&state, idx, TRANSIENT_COOLDOWN_MS).await;
                 continue;
             }
         };
@@ -350,7 +356,8 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
                 if state.verbose {
                     eprintln!("[clauden] upstream error on {account_name}: {e}");
                 }
-                cool_down_and_rotate(&state, idx, DEFAULT_COOLDOWN_MS).await;
+                // Network error reaching the upstream — not the account's fault.
+                cool_down_and_rotate(&state, idx, TRANSIENT_COOLDOWN_MS).await;
                 continue;
             }
         };
@@ -358,7 +365,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
         let status = resp.status().as_u16();
 
         if is_exhaustion(status) {
-            let cooldown = retry_after_ms(resp.headers()).unwrap_or(DEFAULT_COOLDOWN_MS);
+            // 529 = upstream overloaded (global, not this account's quota). Honor
+            // an explicit retry-after if present, else park only briefly so a
+            // server-side blip doesn't take every account offline for a minute.
+            // 429/402 are genuine per-account limits → full cooldown.
+            let fallback = if status == 529 {
+                TRANSIENT_COOLDOWN_MS
+            } else {
+                DEFAULT_COOLDOWN_MS
+            };
+            let cooldown = retry_after_ms(resp.headers()).unwrap_or(fallback);
             if state.verbose {
                 eprintln!(
                     "[clauden] ⚡ {account_name} hit {status}; cooling {}s and rotating",

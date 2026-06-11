@@ -150,12 +150,15 @@ async fn wait_for_callback(listener: TcpListener) -> Result<(String, String)> {
             .ok_or_else(|| anyhow!("callback missing code/state"))?;
 
         // Respond to the browser, then redirect to the official success page.
-        let body = "<html><body style=\"font-family:sans-serif;text-align:center;margin-top:4rem\">\
+        // Declare UTF-8 both in the header and via <meta> — without it a browser
+        // that defaults to windows-1252 renders the ✓ as mojibake ("âœ").
+        let body = "<html><head><meta charset=\"utf-8\"></head>\
+            <body style=\"font-family:sans-serif;text-align:center;margin-top:4rem\">\
             <h2>✓ Logged in</h2><p>You can close this tab and return to your terminal.</p>\
             <script>setTimeout(function(){location.href='https://platform.claude.com/oauth/code/success?app=claude-code'},1200)</script>\
             </body></html>";
         let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
             body.len(),
             body
         );
