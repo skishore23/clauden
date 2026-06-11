@@ -92,9 +92,9 @@ Other commands:
 | `clauden run --no-launch` | Proxy only; connect a client manually |
 | `clauden --port 8080` | Custom port |
 | `clauden --verbose` | Log rotations/errors to stderr |
-| `clauden use <name|#>` | Manually switch active account (by name or list number) |
-| `clauden remove <name|#>` | Remove an account |
-| `clauden rename <name|#> <new>` | Rename an account's display name |
+| `clauden use <name>` | Manually switch active account (by name or list number) |
+| `clauden remove <name>` | Remove an account |
+| `clauden rename <name> <new>` | Rename an account's display name |
 | `clauden strategy <name>` | Set strategy: `round-robin` / `least-used` / `session-sticky` |
 | `clauden update` | Update to the latest version from GitHub |
 
