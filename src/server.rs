@@ -405,8 +405,16 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             };
             let cooldown = retry_after_ms(resp.headers()).unwrap_or(fallback);
             if state.verbose {
+                // The upstream body + utilization headers are the diagnostic:
+                // a real quota 429 reports high util and a rate_limit_error; an
+                // auth/shape rejection that merely *uses* 429 says something else.
+                let util5 = header_str(resp.headers(), "anthropic-ratelimit-unified-5h-utilization");
+                let util7 = header_str(resp.headers(), "anthropic-ratelimit-unified-7d-utilization");
+                let body = resp.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(500).collect();
                 eprintln!(
-                    "[clauden] ⚡ {account_name} hit {status}; cooling {}s and rotating",
+                    "[clauden] ⚡ {account_name} hit {status} (5h-util={util5} 7d-util={util7}); \
+                     cooling {}s — upstream: {snippet}",
                     cooldown / 1000
                 );
             }
@@ -450,6 +458,15 @@ async fn cool_down_and_rotate(state: &AppState, idx: usize, cooldown_ms: i64) {
         cfg.current = (idx + 1) % n;
     }
     persist(state, &cfg);
+}
+
+/// A header value as an owned string, or `"-"` when absent/non-ASCII. For
+/// `--verbose` diagnostics only.
+fn header_str(h: &reqwest::header::HeaderMap, key: &str) -> String {
+    h.get(key)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string()
 }
 
 /// Parse `retry-after` (seconds) into milliseconds.
