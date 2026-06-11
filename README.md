@@ -1,6 +1,6 @@
 <div align="center">
 
-<h1>clauden</h1>
+<h1>claudeN</h1>
 
 **Multi-account Claude OAuth rotating proxy — never hit a rate limit again**
 
