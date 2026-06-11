@@ -122,6 +122,31 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// `--verbose` one-liner for an incoming request. The `anthropic-beta` header is
+/// the headline: a `context-1m-*` value means the client negotiated the 1M-token
+/// window; its absence means the client is assuming the 200K default and will
+/// auto-compact far sooner. Pairs with the per-response status line so account
+/// flapping (which invalidates the upstream prompt cache) is visible too.
+fn log_request(method: &str, path: &str, headers: &HeaderMap, body: &[u8]) {
+    let v: Option<serde_json::Value> = serde_json::from_slice(body).ok();
+    let field = |k: &str| -> Option<String> {
+        v.as_ref()?.get(k).map(|val| match val {
+            serde_json::Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+    };
+    let model = field("model").unwrap_or_else(|| "-".into());
+    let stream = field("stream").unwrap_or_else(|| "false".into());
+    let beta = headers
+        .get("anthropic-beta")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("(none)");
+    eprintln!(
+        "[clauden] → {method} {path} model={model} stream={stream} body={}K beta={beta}",
+        body.len() / 1024
+    );
+}
+
 /// Should this status trigger account rotation? 429 rate-limit, 402 credit,
 /// 529 overloaded.
 fn is_exhaustion(status: u16) -> bool {
@@ -301,6 +326,10 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
     // Stable conversation key (for session-sticky); cheap no-op otherwise.
     let skey = session_key(&body_bytes);
 
+    if state.verbose {
+        log_request(parts.method.as_str(), path_and_query, &parts.headers, &body_bytes);
+    }
+
     // Try each account at most once.
     for _ in 0..account_count {
         let now = now_ms();
@@ -376,13 +405,25 @@ async fn handle(State(state): State<AppState>, req: Request) -> Response {
             };
             let cooldown = retry_after_ms(resp.headers()).unwrap_or(fallback);
             if state.verbose {
+                // The upstream body + utilization headers are the diagnostic:
+                // a real quota 429 reports high util and a rate_limit_error; an
+                // auth/shape rejection that merely *uses* 429 says something else.
+                let util5 = header_str(resp.headers(), "anthropic-ratelimit-unified-5h-utilization");
+                let util7 = header_str(resp.headers(), "anthropic-ratelimit-unified-7d-utilization");
+                let body = resp.text().await.unwrap_or_default();
+                let snippet: String = body.chars().take(500).collect();
                 eprintln!(
-                    "[clauden] ⚡ {account_name} hit {status}; cooling {}s and rotating",
+                    "[clauden] ⚡ {account_name} hit {status} (5h-util={util5} 7d-util={util7}); \
+                     cooling {}s — upstream: {snippet}",
                     cooldown / 1000
                 );
             }
             cool_down_and_rotate(&state, idx, cooldown).await;
             continue;
+        }
+
+        if state.verbose {
+            eprintln!("[clauden] ← {status} via {account_name}");
         }
 
         // Success (or a non-rotation error): record usage + quota, stream back.
@@ -417,6 +458,15 @@ async fn cool_down_and_rotate(state: &AppState, idx: usize, cooldown_ms: i64) {
         cfg.current = (idx + 1) % n;
     }
     persist(state, &cfg);
+}
+
+/// A header value as an owned string, or `"-"` when absent/non-ASCII. For
+/// `--verbose` diagnostics only.
+fn header_str(h: &reqwest::header::HeaderMap, key: &str) -> String {
+    h.get(key)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string()
 }
 
 /// Parse `retry-after` (seconds) into milliseconds.
