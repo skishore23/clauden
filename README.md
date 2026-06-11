@@ -62,6 +62,14 @@ cargo build --release
 cp target/release/clauden ~/.local/bin/   # or /usr/local/bin
 ```
 
+## Update
+
+```bash
+clauden update      # rebuilds + reinstalls the latest from GitHub
+```
+
+(Equivalent to `cargo install --git https://github.com/skishore23/clauden --force`.)
+
 ## Use
 
 ```bash
@@ -77,9 +85,10 @@ Other commands:
 | `clauden run --no-launch` | Proxy only; connect a client manually |
 | `clauden --port 8080` | Custom port |
 | `clauden --verbose` | Log rotations/errors to stderr |
-| `clauden use <name>` | Manually switch active account |
-| `clauden remove <name>` | Remove an account |
+| `clauden use <name|#>` | Manually switch active account (by name or list number) |
+| `clauden remove <name|#>` | Remove an account |
 | `clauden strategy <name>` | Set strategy: `round-robin` / `least-used` / `session-sticky` |
+| `clauden update` | Update to the latest version from GitHub |
 
 To point a client at the proxy manually:
 

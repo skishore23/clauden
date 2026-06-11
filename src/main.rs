@@ -49,9 +49,13 @@ enum Command {
     ///
     /// One of: round-robin, least-used, session-sticky. Omit to show current.
     Strategy { name: Option<String> },
+    /// Update clauden to the latest version from GitHub.
+    Update,
     /// Run the proxy (default if no command given).
     Run,
 }
+
+const REPO_URL: &str = "https://github.com/skishore23/clauden";
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,6 +71,7 @@ async fn main() -> Result<()> {
         Some(Command::Use { name }) => cmd_use(&name),
         Some(Command::Remove { name }) => cmd_remove(&name),
         Some(Command::Strategy { name }) => cmd_strategy(name),
+        Some(Command::Update) => cmd_update(),
         Some(Command::Run) | None => cmd_run(cli.port, cli.no_launch).await,
     }
 }
@@ -316,6 +321,45 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Self-update: rebuild + reinstall the latest version from GitHub via cargo.
+fn cmd_update() -> Result<()> {
+    use std::process::Command;
+
+    if Command::new("cargo").arg("--version").output().is_err() {
+        eprintln!(
+            "  {} cargo not found — install Rust (https://rustup.rs) to update.",
+            ui::red("✗")
+        );
+        std::process::exit(1);
+    }
+
+    println!(
+        "\n  {} updating clauden from {} (this may take a minute)…\n",
+        ui::cyan("⠿"),
+        ui::dim(REPO_URL)
+    );
+
+    let status = Command::new("cargo")
+        .args(["install", "--git", REPO_URL, "--force"])
+        .status();
+
+    match status {
+        Ok(s) if s.success() => {
+            println!(
+                "\n  {} Updated. Run {} to confirm the version.\n",
+                ui::green("✓"),
+                ui::bold("clauden --version")
+            );
+            Ok(())
+        }
+        _ => {
+            eprintln!("  {} Update failed. Try manually:", ui::red("✗"));
+            eprintln!("      cargo install --git {REPO_URL} --force");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Compact human duration: `45s`, `12m`, `2h`.
