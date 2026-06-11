@@ -46,12 +46,18 @@ impl Strategy {
 /// One Claude subscription account authenticated via OAuth.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Account {
-    /// Human label — usually the account email.
+    /// Human label — usually the account email (disambiguated by org if needed).
     pub name: String,
     #[serde(default)]
     pub account_uuid: Option<String>,
     #[serde(default)]
     pub tier: Option<String>,
+    /// Organization this token is scoped to (lets the same email be added for
+    /// multiple Claude orgs as distinct, rotatable accounts).
+    #[serde(default)]
+    pub org_uuid: Option<String>,
+    #[serde(default)]
+    pub org_name: Option<String>,
 
     /// OAuth credentials. `access_token` is `sk-ant-oat01-…`.
     pub access_token: String,

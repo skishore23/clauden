@@ -488,6 +488,8 @@ mod tests {
             name: name.into(),
             account_uuid: None,
             tier: None,
+            org_uuid: None,
+            org_name: None,
             access_token: "t".into(),
             refresh_token: "r".into(),
             expires_at: i64::MAX,

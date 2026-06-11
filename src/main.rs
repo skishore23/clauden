@@ -119,12 +119,12 @@ fn cmd_list() -> Result<()> {
         .clamp(7, 32);
 
     // Column widths (visible).
-    let (w_mark, w_tier, w_status, w_quota, w_reqs) = (1, 4, 14, 16, 6);
+    let (w_idx, w_tier, w_status, w_quota, w_reqs) = (3, 4, 14, 16, 6);
 
     let line = |l: &str, m: &str, r: &str| {
         format!(
             "{l}{}{m}{}{m}{}{m}{}{m}{}{m}{}{r}",
-            "─".repeat(w_mark + 2),
+            "─".repeat(w_idx + 2),
             "─".repeat(name_w + 2),
             "─".repeat(w_tier + 2),
             "─".repeat(w_status + 2),
@@ -135,7 +135,7 @@ fn cmd_list() -> Result<()> {
 
     let header = format!(
         "│ {} │ {} │ {} │ {} │ {} │ {} │",
-        ui::pad_end("", w_mark),
+        ui::dim(&ui::pad_end("#", w_idx)),
         ui::dim(&ui::pad_end("Account", name_w)),
         ui::dim(&ui::pad_end("Tier", w_tier)),
         ui::dim(&ui::pad_end("Status", w_status)),
@@ -148,10 +148,12 @@ fn cmd_list() -> Result<()> {
     println!("  {}", ui::dim(&line("├", "┼", "┤")));
 
     for (i, a) in cfg.accounts.iter().enumerate() {
-        let marker = if i == cfg.current {
-            ui::cyan("▶")
+        // "▶1" for the active account, " 2" otherwise (1-based for the user).
+        let n = i + 1;
+        let idx = if i == cfg.current {
+            format!("{}{}", ui::cyan("▶"), n)
         } else {
-            " ".to_string()
+            format!(" {n}")
         };
         let tier = a.tier.clone().unwrap_or_else(|| "—".into());
 
@@ -168,7 +170,7 @@ fn cmd_list() -> Result<()> {
 
         println!(
             "  │ {} │ {} │ {} │ {} │ {} │ {} │",
-            ui::pad_end(&marker, w_mark),
+            ui::pad_end(&idx, w_idx),
             ui::pad_end(&a.name, name_w),
             ui::pad_end(&tier, w_tier),
             ui::pad_end(&status, w_status),
@@ -208,36 +210,53 @@ fn cmd_strategy(name: Option<String>) -> Result<()> {
     Ok(())
 }
 
-fn cmd_use(name: &str) -> Result<()> {
+/// Resolve an account selector — either a 1-based index (as shown in `list`) or
+/// an exact account name — to an array index.
+fn resolve_account(cfg: &Config, selector: &str) -> Option<usize> {
+    if let Ok(n) = selector.parse::<usize>() {
+        if n >= 1 && n <= cfg.accounts.len() {
+            return Some(n - 1);
+        }
+    }
+    cfg.find_account(selector)
+}
+
+fn cmd_use(selector: &str) -> Result<()> {
     let mut cfg = Config::load()?;
-    match cfg.find_account(name) {
+    match resolve_account(&cfg, selector) {
         Some(i) => {
+            let name = cfg.accounts[i].name.clone();
             cfg.current = i;
             cfg.save()?;
-            println!("  {} Active account: {}", ui::cyan("▶"), ui::bold(name));
+            println!("  {} Active account: {}", ui::cyan("▶"), ui::bold(&name));
             Ok(())
         }
         None => {
-            eprintln!("  {} No account named '{name}'. Run {}.", ui::red("✗"), ui::bold("clauden list"));
+            eprintln!(
+                "  {} No account '{selector}'. Run {} to see names/numbers.",
+                ui::red("✗"),
+                ui::bold("clauden list")
+            );
             std::process::exit(1);
         }
     }
 }
 
-fn cmd_remove(name: &str) -> Result<()> {
+fn cmd_remove(selector: &str) -> Result<()> {
     let mut cfg = Config::load()?;
-    match cfg.find_account(name) {
+    match resolve_account(&cfg, selector) {
         Some(i) => {
+            let name = cfg.accounts[i].name.clone();
             cfg.accounts.remove(i);
             if cfg.current >= cfg.accounts.len() {
                 cfg.current = 0;
             }
             cfg.save()?;
-            println!("  {} Removed {}", ui::green("✓"), ui::bold(name));
+            println!("  {} Removed {}", ui::green("✓"), ui::bold(&name));
             Ok(())
         }
         None => {
-            eprintln!("  {} No account named '{name}'.", ui::red("✗"));
+            eprintln!("  {} No account '{selector}'.", ui::red("✗"));
             std::process::exit(1);
         }
     }

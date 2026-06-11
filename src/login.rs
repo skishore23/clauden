@@ -53,18 +53,35 @@ pub async fn run(cfg: &mut Config) -> Result<()> {
             uuid: None,
             email: None,
             tier: None,
+            org_uuid: None,
+            org_name: None,
         });
 
-    let name = profile
+    let email = profile
         .email
         .clone()
         .unwrap_or_else(|| format!("account-{}", cfg.accounts.len() + 1));
 
-    // Replace an existing account with the same uuid/name (dedupe).
+    // Same account *and* same org → update in place (refresh tokens). Different
+    // org under the same email → a distinct account.
+    let existing = cfg.accounts.iter().position(|a| {
+        a.account_uuid.is_some()
+            && a.account_uuid == profile.uuid
+            && a.org_uuid == profile.org_uuid
+    });
+
+    // Pick a unique, human display name.
+    let name = match &existing {
+        Some(i) => cfg.accounts[*i].name.clone(),
+        None => unique_name(cfg, &email, profile.org_name.as_deref()),
+    };
+
     let account = Account {
         name: name.clone(),
         account_uuid: profile.uuid.clone(),
         tier: profile.tier.clone(),
+        org_uuid: profile.org_uuid.clone(),
+        org_name: profile.org_name.clone(),
         access_token: tokens.access_token,
         refresh_token: tokens.refresh_token,
         expires_at: tokens.expires_at,
@@ -76,23 +93,46 @@ pub async fn run(cfg: &mut Config) -> Result<()> {
         reset_7d: None,
     };
 
-    let existing = cfg.accounts.iter().position(|a| {
-        a.name == account.name
-            || (a.account_uuid.is_some() && a.account_uuid == account.account_uuid)
-    });
+    let updated = existing.is_some();
     match existing {
         Some(i) => cfg.accounts[i] = account,
         None => cfg.accounts.push(account),
     }
 
     let tier = profile.tier.unwrap_or_else(|| "unknown".into());
+    let verb = if updated { "Updated" } else { "Added" };
     println!(
-        "\n  {} Added {} {}\n",
+        "\n  {} {} {} {}\n",
         ui::green("✓"),
+        verb,
         ui::bold(&name),
         ui::dim(&format!("({tier})"))
     );
     Ok(())
+}
+
+/// Build a display name that's unique among existing accounts. Prefers the bare
+/// email; on collision appends the org name, then a numeric suffix.
+fn unique_name(cfg: &Config, email: &str, org_name: Option<&str>) -> String {
+    let taken = |n: &str| cfg.accounts.iter().any(|a| a.name == n);
+
+    if !taken(email) {
+        return email.to_string();
+    }
+    if let Some(org) = org_name {
+        let candidate = format!("{email} ({org})");
+        if !taken(&candidate) {
+            return candidate;
+        }
+    }
+    let mut n = 2;
+    loop {
+        let candidate = format!("{email} #{n}");
+        if !taken(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
 }
 
 /// Accept a single connection and parse the OAuth code/state from the request line.

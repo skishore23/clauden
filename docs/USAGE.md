@@ -115,13 +115,28 @@ clauden run --no-launch --port 8080 --verbose
 ## 4. Managing accounts
 
 ```bash
-clauden list                 # show all accounts + status
-clauden use you@personal.com # force a specific account to be active
-clauden remove side@project.com
+clauden list                 # show all accounts + status (with a # index column)
+clauden use 2                # select by the number shown in `list`
+clauden use you@personal.com # …or by exact name
+clauden remove 2             # remove by number or name
 ```
 
 `clauden use` is handy if you want to pin traffic to one account temporarily —
 the proxy still rotates away from it on a rate limit.
+
+### Multiple accounts under the same email
+
+If one Claude login belongs to several organizations, you can add each org as a
+separate, rotatable account — log in once per org. clauden keeps them distinct
+by organization and disambiguates the display name, e.g.:
+
+```
+  1  you@example.com
+  2  you@example.com (Acme Inc)
+```
+
+Select either by its number (`clauden use 1`) or full name. Logging in again
+with the same account *and* org just refreshes its tokens in place.
 
 ---
 

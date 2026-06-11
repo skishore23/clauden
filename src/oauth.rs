@@ -182,6 +182,8 @@ pub struct Profile {
     pub uuid: Option<String>,
     pub email: Option<String>,
     pub tier: Option<String>,
+    pub org_uuid: Option<String>,
+    pub org_name: Option<String>,
 }
 
 pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> Result<Profile> {
@@ -195,8 +197,14 @@ pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> Resu
         has_claude_pro: bool,
     }
     #[derive(Deserialize)]
+    struct OrgInfo {
+        uuid: Option<String>,
+        name: Option<String>,
+    }
+    #[derive(Deserialize)]
     struct ProfileResponse {
         account: Option<AccountInfo>,
+        organization: Option<OrgInfo>,
     }
 
     let resp = client
@@ -214,6 +222,7 @@ pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> Resu
 
     let pr: ProfileResponse = resp.json().await.context("parsing profile response")?;
     let account = pr.account;
+    let org = pr.organization;
     Ok(Profile {
         uuid: account.as_ref().and_then(|a| a.uuid.clone()),
         email: account.as_ref().and_then(|a| a.email.clone()),
@@ -226,5 +235,7 @@ pub async fn fetch_profile(client: &reqwest::Client, access_token: &str) -> Resu
                 "free".to_string()
             }
         }),
+        org_uuid: org.as_ref().and_then(|o| o.uuid.clone()),
+        org_name: org.as_ref().and_then(|o| o.name.clone()),
     })
 }

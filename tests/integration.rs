@@ -105,6 +105,8 @@ fn account(name: &str, token: &str) -> Account {
         name: name.into(),
         account_uuid: None,
         tier: Some("max".into()),
+        org_uuid: None,
+        org_name: None,
         access_token: token.into(),
         refresh_token: "refresh".into(),
         expires_at: 32_503_680_000_000, // year ~3000: never refresh during tests
